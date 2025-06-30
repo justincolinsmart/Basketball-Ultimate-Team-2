@@ -1,0 +1,509 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+    getAuth, 
+    createUserWithEmailAndPassword, 
+    signInWithEmailAndPassword, 
+    signOut, 
+    onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+    getFirestore, 
+    doc, 
+    setDoc, 
+    getDoc, 
+    collection, 
+    addDoc,
+    query,
+    where,
+    getDocs,
+    writeBatch,
+    serverTimestamp,
+    orderBy,
+    limit
+} from 'firebase/firestore';
+import { ArrowRight, LogOut, Package, Users, ShoppingCart, Trophy, Star } from 'lucide-react';
+
+// --- Firebase Configuration ---
+// This is now connected to YOUR Firebase project.
+const firebaseConfig = {
+  apiKey: "AIzaSyB6u6yvXpqpKNUNqLVvNxiAgr60NA_qMhU",
+  authDomain: "basketball-ultimate-team-2.firebaseapp.com",
+  projectId: "basketball-ultimate-team-2",
+  storageBucket: "basketball-ultimate-team-2.appspot.com",
+  messagingSenderId: "189748003348",
+  appId: "YOUR_APP_ID" // You can find this in your Firebase project settings if needed
+};
+
+// --- Initialize Firebase ---
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// --- MOCK PLAYER DATA & SIMULATION LOGIC ---
+// In a real app, this would be a much larger database of players.
+const ALL_PLAYERS_DATABASE = [
+    { id: 'P001', name: 'LeBron James', position: 'SF', archetype: 'Playmaker', overall: 96, team: 'LAL' },
+    { id: 'P002', name: 'Stephen Curry', position: 'PG', archetype: 'Shooter', overall: 95, team: 'GSW' },
+    { id: 'P003', name: 'Kevin Durant', position: 'PF', archetype: 'Scorer', overall: 96, team: 'PHX' },
+    { id: 'P004', name: 'Nikola Jokic', position: 'C', archetype: 'Playmaker', overall: 98, team: 'DEN' },
+    { id: 'P005', name: 'Giannis Antetokounmpo', position: 'PF', archetype: 'Scorer', overall: 97, team: 'MIL' },
+    { id: 'P006', name: 'Luka Doncic', position: 'PG', archetype: 'Playmaker', overall: 95, team: 'DAL' },
+    { id: 'P007', name: 'Jayson Tatum', position: 'SF', archetype: 'Scorer', overall: 95, team: 'BOS' },
+    { id: 'P008', name: 'Joel Embiid', position: 'C', archetype: 'Scorer', overall: 96, team: 'PHI' },
+    { id: 'P009', name: 'Kawhi Leonard', position: 'SF', archetype: 'Defender', overall: 94, team: 'LAC' },
+    { id: 'P010', name: 'Damian Lillard', position: 'PG', archetype: 'Shooter', overall: 94, team: 'MIL' },
+    { id: 'P011', name: 'Jimmy Butler', position: 'SF', archetype: 'Defender', overall: 93, team: 'MIA' },
+    { id: 'P012', name: 'Devin Booker', position: 'SG', archetype: 'Shooter', overall: 94, team: 'PHX' },
+    { id: 'P013', name: 'Anthony Davis', position: 'C', archetype: 'Defender', overall: 93, team: 'LAL' },
+    { id: 'P014', name: 'Ja Morant', position: 'PG', archetype: 'Scorer', overall: 92, team: 'MEM' },
+    { id: 'P015', name: 'Zion Williamson', position: 'PF', archetype: 'Scorer', overall: 90, team: 'NOP' },
+    { id: 'P016', name: 'Trae Young', position: 'PG', archetype: 'Shooter', overall: 90, team: 'ATL' },
+    { id: 'P017', name: 'Shai Gilgeous-Alexander', position: 'SG', archetype: 'Playmaker', overall: 93, team: 'OKC' },
+    { id: 'P018', name: 'Donovan Mitchell', position: 'SG', archetype: 'Scorer', overall: 92, team: 'CLE' },
+    { id: 'P019', name: 'Jrue Holiday', position: 'PG', archetype: 'Defender', overall: 88, team: 'BOS' },
+    { id: 'P020', name: 'Draymond Green', position: 'PF', archetype: 'Defender', overall: 85, team: 'GSW' },
+];
+
+const getTier = (overall) => {
+    if (overall >= 95) return { name: 'Diamond', color: 'from-blue-400 to-purple-500', glow: 'shadow-blue-400/50' };
+    if (overall >= 90) return { name: 'Amethyst', color: 'from-purple-500 to-pink-500', glow: 'shadow-purple-500/50' };
+    if (overall >= 85) return { name: 'Ruby', color: 'from-red-500 to-red-700', glow: 'shadow-red-500/50' };
+    return { name: 'Gold', color: 'from-yellow-400 to-amber-500', glow: 'shadow-yellow-400/50' };
+};
+
+// --- HELPER COMPONENTS ---
+
+const PlayerCard = ({ player }) => {
+    const tier = getTier(player.overall);
+    return (
+        <div className={`relative rounded-xl p-4 text-white bg-gradient-to-br ${tier.color} shadow-lg ${tier.glow} transform hover:scale-105 transition-transform duration-300 ease-in-out`}>
+            <div className="absolute top-2 right-2 bg-black bg-opacity-40 rounded-full px-3 py-1 text-sm font-bold">{player.overall}</div>
+            <div className="text-center">
+                <div className="text-xl font-bold truncate">{player.name}</div>
+                <div className="text-sm opacity-80">{player.position} &bull; {player.team}</div>
+                <div className="mt-2 text-xs font-semibold bg-black bg-opacity-30 rounded-full px-2 py-0.5 inline-block">{player.archetype}</div>
+            </div>
+        </div>
+    );
+};
+
+const Spinner = () => (
+    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500"></div>
+);
+
+const AuthForm = ({ isLogin, onSubmit, error }) => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [username, setUsername] = useState('');
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSubmit(email, password, username);
+    };
+
+    return (
+        <div className="w-full max-w-md mx-auto">
+            <div className="bg-white rounded-xl shadow-2xl p-8">
+                <h2 className="text-3xl font-bold text-center text-gray-800 mb-2">{isLogin ? 'Welcome Back' : 'Create Account'}</h2>
+                <p className="text-center text-gray-500 mb-8">{isLogin ? 'Sign in to manage your team.' : 'Join the league and build your dynasty.'}</p>
+                <form onSubmit={handleSubmit}>
+                    {!isLogin && (
+                        <div className="mb-4">
+                            <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="username">
+                                Username
+                            </label>
+                            <input
+                                id="username"
+                                type="text"
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                                className="shadow-inner appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                placeholder="Your Team Name"
+                                required
+                            />
+                        </div>
+                    )}
+                    <div className="mb-4">
+                        <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="email">
+                            Email
+                        </label>
+                        <input
+                            id="email"
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="shadow-inner appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            placeholder="you@example.com"
+                            required
+                        />
+                    </div>
+                    <div className="mb-6">
+                        <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="password">
+                            Password
+                        </label>
+                        <input
+                            id="password"
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="shadow-inner appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 mb-3 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            placeholder="******************"
+                            required
+                        />
+                    </div>
+                    {error && <p className="text-red-500 text-xs italic mb-4">{error}</p>}
+                    <div className="flex items-center justify-between">
+                        <button
+                            type="submit"
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg focus:outline-none focus:shadow-outline w-full transition-transform transform hover:scale-105"
+                        >
+                            {isLogin ? 'Sign In' : 'Create Account'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+
+// --- MAIN APP SECTIONS ---
+
+const MyTeam = ({ user, userData }) => {
+    const [myPlayers, setMyPlayers] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    const fetchMyPlayers = useCallback(async () => {
+        if (!user) return;
+        setLoading(true);
+        try {
+            const playersColRef = collection(db, `users/${user.uid}/players`);
+            const q = query(playersColRef, orderBy('overall', 'desc'));
+            const querySnapshot = await getDocs(q);
+            const players = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setMyPlayers(players);
+        } catch (error) {
+            console.error("Error fetching players:", error);
+        }
+        setLoading(false);
+    }, [user]);
+
+    useEffect(() => {
+        fetchMyPlayers();
+    }, [fetchMyPlayers]);
+
+    if (loading) {
+        return <div className="flex justify-center items-center h-64"><Spinner /></div>;
+    }
+
+    return (
+        <div>
+            <h2 className="text-3xl font-bold text-gray-800 mb-1">My Team</h2>
+            <p className="text-gray-500 mb-6">Your collection of players. Build your lineup here.</p>
+            {myPlayers.length > 0 ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                    {myPlayers.map(player => (
+                        <PlayerCard key={player.id} player={player} />
+                    ))}
+                </div>
+            ) : (
+                <p>You have no players yet. Go open a pack!</p>
+            )}
+        </div>
+    );
+};
+
+const PackOpener = ({ user, onPackOpened }) => {
+    const [opening, setOpening] = useState(false);
+    const [revealedPlayers, setRevealedPlayers] = useState([]);
+
+    const openPack = async () => {
+        setOpening(true);
+        setRevealedPlayers([]);
+
+        // Simulate pack opening animation
+        await new Promise(res => setTimeout(res, 500));
+
+        const pack = [];
+        // Simple pack logic: 1 Ruby, 2 Gold
+        const rubyPlayers = ALL_PLAYERS_DATABASE.filter(p => getTier(p.overall).name === 'Ruby');
+        const goldPlayers = ALL_PLAYERS_DATABASE.filter(p => getTier(p.overall).name === 'Gold');
+        
+        pack.push(rubyPlayers[Math.floor(Math.random() * rubyPlayers.length)]);
+        for(let i=0; i<2; i++){
+            pack.push(goldPlayers[Math.floor(Math.random() * goldPlayers.length)]);
+        }
+        
+        // Save players to Firestore
+        try {
+            const batch = writeBatch(db);
+            pack.forEach(player => {
+                const playerRef = doc(collection(db, `users/${user.uid}/players`));
+                batch.set(playerRef, player);
+            });
+            await batch.commit();
+        } catch (error) {
+            console.error("Error saving pack:", error);
+        }
+
+        setRevealedPlayers(pack);
+        setOpening(false);
+        if(onPackOpened) onPackOpened();
+    };
+
+
+    return (
+        <div>
+            <h2 className="text-3xl font-bold text-gray-800 mb-6">Pack Store</h2>
+            <div className="bg-white p-8 rounded-xl shadow-lg text-center">
+                <h3 className="text-2xl font-bold mb-2">Starter Pack</h3>
+                <p className="text-gray-600 mb-6">Guaranteed to contain 1 Ruby and 2 Gold players.</p>
+                <button
+                    onClick={openPack}
+                    disabled={opening}
+                    className="bg-gradient-to-r from-amber-500 to-orange-600 text-white font-bold py-3 px-8 rounded-lg text-lg transform hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    {opening ? 'Opening...' : 'Open Pack (Free)'}
+                </button>
+            </div>
+
+            {revealedPlayers.length > 0 && (
+                 <div className="mt-8">
+                    <h3 className="text-2xl font-bold text-center mb-4">You got:</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in">
+                        {revealedPlayers.map((player, index) => (
+                           <div key={index} style={{animationDelay: `${index * 150}ms`}} className="animate-slide-up">
+                             <PlayerCard player={player} />
+                           </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const Marketplace = () => {
+    // Placeholder for marketplace logic
+    return (
+        <div>
+            <h2 className="text-3xl font-bold text-gray-800 mb-6">Marketplace</h2>
+            <div className="bg-white p-8 rounded-xl shadow-lg text-center">
+                <ShoppingCart className="mx-auto h-16 w-16 text-gray-300 mb-4" />
+                <h3 className="text-xl font-bold text-gray-700">Coming Soon</h3>
+                <p className="text-gray-500">The player marketplace is under construction. Soon you'll be able to buy and sell players with other users!</p>
+            </div>
+        </div>
+    );
+};
+
+const Leaderboard = () => {
+    // Placeholder for leaderboard logic
+    return (
+        <div>
+            <h2 className="text-3xl font-bold text-gray-800 mb-6">Leaderboard</h2>
+            <div className="bg-white p-8 rounded-xl shadow-lg text-center">
+                <Trophy className="mx-auto h-16 w-16 text-yellow-400 mb-4" />
+                <h3 className="text-xl font-bold text-gray-700">Coming Soon</h3>
+                <p className="text-gray-500">The global leaderboard is under construction. Compete to see who has the best team in the league!</p>
+            </div>
+        </div>
+    );
+};
+
+
+// --- APP CONTAINER & AUTH LOGIC ---
+
+export default function App() {
+    const [user, setUser] = useState(null);
+    const [userData, setUserData] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [authError, setAuthError] = useState('');
+    const [isLogin, setIsLogin] = useState(true);
+    const [activeTab, setActiveTab] = useState('team');
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+            if (currentUser) {
+                setUser(currentUser);
+                // Fetch user data from Firestore
+                const userDocRef = doc(db, 'users', currentUser.uid);
+                const userDoc = await getDoc(userDocRef);
+                if (userDoc.exists()) {
+                    setUserData(userDoc.data());
+                }
+            } else {
+                setUser(null);
+                setUserData(null);
+            }
+            setLoading(false);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    const handleSignUp = async (email, password, username) => {
+        try {
+            // Check if username is already taken
+            const usersRef = collection(db, "users");
+            const q = query(usersRef, where("username", "==", username));
+            const querySnapshot = await getDocs(q);
+            if (!querySnapshot.empty) {
+                setAuthError("This username is already taken.");
+                return;
+            }
+
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            const newUser = userCredential.user;
+
+            // Create user document in Firestore
+            await setDoc(doc(db, 'users', newUser.uid), {
+                username: username,
+                email: email,
+                createdAt: serverTimestamp(),
+                wins: 0,
+                losses: 0,
+            });
+            
+            // Give user a starter pack
+            const starterPack = [];
+            const amethystPlayers = ALL_PLAYERS_DATABASE.filter(p => getTier(p.overall).name === 'Amethyst');
+            const rubyPlayers = ALL_PLAYERS_DATABASE.filter(p => getTier(p.overall).name === 'Ruby');
+            
+            starterPack.push(amethystPlayers[Math.floor(Math.random() * amethystPlayers.length)]);
+            for(let i=0; i<4; i++){
+                starterPack.push(rubyPlayers[Math.floor(Math.random() * rubyPlayers.length)]);
+            }
+
+            const batch = writeBatch(db);
+            starterPack.forEach(player => {
+                const playerRef = doc(collection(db, `users/${newUser.uid}/players`));
+                batch.set(playerRef, { ...player, overall: player.overall });
+            });
+            await batch.commit();
+
+        } catch (error) {
+            setAuthError(error.message);
+        }
+    };
+
+    const handleLogin = async (email, password) => {
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
+        } catch (error) {
+            setAuthError('Invalid email or password.');
+        }
+    };
+
+    const handleLogout = async () => {
+        await signOut(auth);
+    };
+
+    const renderContent = () => {
+        switch (activeTab) {
+            case 'team':
+                return <MyTeam user={user} userData={userData} />;
+            case 'packs':
+                return <PackOpener user={user} onPackOpened={() => setActiveTab('team')} />;
+            case 'market':
+                return <Marketplace />;
+            case 'leaderboard':
+                return <Leaderboard />;
+            default:
+                return <MyTeam user={user} userData={userData} />;
+        }
+    };
+
+    if (loading) {
+        return (
+            <div className="bg-gray-100 min-h-screen flex justify-center items-center">
+                <Spinner />
+            </div>
+        );
+    }
+
+    if (!user) {
+        return (
+            <div className="bg-gray-100 min-h-screen flex flex-col justify-center items-center p-4">
+                <div className="text-center mb-8">
+                    <h1 className="text-5xl font-bold text-gray-800">Basketball Ultimate Team</h1>
+                    <p className="text-xl text-gray-500 mt-2">Build your dream team. Dominate the league.</p>
+                </div>
+                <AuthForm
+                    isLogin={isLogin}
+                    onSubmit={isLogin ? handleLogin : handleSignUp}
+                    error={authError}
+                />
+                <button onClick={() => { setIsLogin(!isLogin); setAuthError(''); }} className="mt-6 text-sm text-indigo-600 hover:underline">
+                    {isLogin ? "Need an account? Sign Up" : "Already have an account? Sign In"}
+                </button>
+            </div>
+        );
+    }
+
+    return (
+        <div className="bg-gray-50 min-h-screen">
+            <header className="bg-white shadow-md">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex justify-between items-center py-4">
+                        <div className="flex items-center space-x-2">
+                            <Star className="h-8 w-8 text-indigo-600" />
+                            <h1 className="text-2xl font-bold text-gray-800 hidden sm:block">
+                                {userData ? `${userData.username}'s Team` : 'Ultimate Team'}
+                            </h1>
+                        </div>
+                        <div className="flex items-center space-x-4">
+                             <div className="text-right hidden md:block">
+                                <p className="font-semibold text-gray-700">{userData?.username}</p>
+                                <p className="text-xs text-gray-500">{user.email}</p>
+                            </div>
+                            <button
+                                onClick={handleLogout}
+                                className="flex items-center space-x-2 bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors"
+                            >
+                                <LogOut className="h-5 w-5" />
+                                <span className="hidden sm:inline">Logout</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <main className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+                    {/* Sidebar Navigation */}
+                    <aside className="md:col-span-1">
+                        <div className="bg-white p-4 rounded-xl shadow-lg">
+                            <nav className="space-y-2">
+                                <button onClick={() => setActiveTab('team')} className={`w-full flex items-center space-x-3 p-3 rounded-lg text-left font-semibold transition-colors ${activeTab === 'team' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                    <Users className="h-5 w-5" />
+                                    <span>My Team</span>
+                                </button>
+                                <button onClick={() => setActiveTab('packs')} className={`w-full flex items-center space-x-3 p-3 rounded-lg text-left font-semibold transition-colors ${activeTab === 'packs' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                    <Package className="h-5 w-5" />
+                                    <span>Open Packs</span>
+                                </button>
+                                <button onClick={() => setActiveTab('market')} className={`w-full flex items-center space-x-3 p-3 rounded-lg text-left font-semibold transition-colors ${activeTab === 'market' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                    <ShoppingCart className="h-5 w-5" />
+                                    <span>Marketplace</span>
+                                </button>
+                                <button onClick={() => setActiveTab('leaderboard')} className={`w-full flex items-center space-x-3 p-3 rounded-lg text-left font-semibold transition-colors ${activeTab === 'leaderboard' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                    <Trophy className="h-5 w-5" />
+                                    <span>Leaderboard</span>
+                                </button>
+                            </nav>
+                        </div>
+                    </aside>
+
+                    {/* Main Content Area */}
+                    <div className="md:col-span-3">
+                        <div className="bg-white p-6 sm:p-8 rounded-xl shadow-lg">
+                            {renderContent()}
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    );
+}
+
